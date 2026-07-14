@@ -1,4 +1,4 @@
-# pypi-download
+# Python-Dependency-Downloader
 
 A small command-line utility that, given one or more package names (or a
 `requirements.txt` file), **recursively resolves the full PyPI dependency tree**
@@ -16,7 +16,13 @@ offline wheel cache or staging dependencies for an air-gapped/locked-down host.
 - Recursive dependency resolution (handles shared deps and cycles).
 - Correct PEP 508 requirement & environment-marker parsing (via `packaging`),
   with a built-in best-effort fallback when `packaging` isn't installed.
-- Optional **extras** support (e.g. `httpx[http2]`).
+- Optional **extras** support (e.g. `httpx[http2]`), including extras requested
+  on **transitive** dependencies (e.g. `mcp` -> `pyjwt[crypto]` -> `cryptography`).
+- **Version pinning** via pip-style specifiers (e.g. `pkg==1.2.3`, `pkg>=13,<14`)
+  for the packages you request directly.
+- **Transitive exact pins** are honoured: when a package's metadata requires a
+  dependency with an exact `==` version, that version is fetched; other
+  specifiers (`>=`, ranges, none) use the latest release.
 - Cross-platform downloads: pick `linux`, `macos`, `windows`, or a literal wheel
   platform tag (`win_amd64`, `manylinux2014_aarch64`, `macosx_11_0_arm64`, ...).
 - Python-version filtering (`3.13`, `3.13.7`, `cp313`), including correct
@@ -54,12 +60,12 @@ You must provide at least one package name or a `-r/--requirements` file.
 | `packages` | One or more package names to resolve (optional if `-r` is given). |
 | `-r`, `--requirements FILE` | Read package names from a requirements.txt-style file. May be repeated. |
 | `-d`, `--dest`, `-o`, `--output DIR` | Download directory; created if missing. `~` is expanded. Default: `./downloads`. |
-| `--extras LIST` | Comma-separated extras for the root package(s), e.g. `http2,cli`. |
-| `--platform SPEC` | Target platform: `linux` / `macos` / `windows`, or a literal wheel platform tag. Defaults to the current machine. |
-| `--python-version VER` | Restrict wheels to a Python version (`3.13`, `3.13.7`, `313`, `cp313`). Patch level is ignored. |
-| `--free-threaded` | Download free-threaded (no-GIL, `cpXXXt`) wheels instead of the standard GIL build. |
-| `--wheels-only` | Download only wheels (`.whl`); skip source distributions. |
-| `--no-download` | Only resolve and print the dependency tree; download nothing. |
+| `-e`, `--extras LIST` | Comma-separated extras for the root package(s), e.g. `http2,cli`. |
+| `-p`, `--platform SPEC` | Target platform: `linux` / `macos` / `windows`, or a literal wheel platform tag. Defaults to the current machine. |
+| `-P`, `--python-version VER` | Restrict wheels to a Python version (`3.13`, `3.13.7`, `313`, `cp313`). Patch level is ignored. |
+| `-f`, `--free-threaded` | Download free-threaded (no-GIL, `cpXXXt`) wheels instead of the standard GIL build. |
+| `-w`, `--wheels-only` | Download only wheels (`.whl`); skip source distributions. |
+| `-n`, `--no-download` | Only resolve and print the dependency tree; download nothing. |
 | `-q`, `--quiet` | Suppress the per-package resolution log. |
 
 ## Examples
@@ -86,6 +92,13 @@ Download Windows 64-bit wheels for CPython 3.13 while sitting on a different OS:
 
 ```bash
 python PyDD.py PySide6 --platform win_amd64 --python-version 3.13.7 --wheels-only -o ~/pyside6_wheels
+```
+
+Download a specific version instead of the latest release:
+
+```bash
+python PyDD.py pydantic-core==2.46.4
+python PyDD.py "rich>=13,<14"
 ```
 
 Resolve everything listed in a requirements file (recursively):
@@ -118,17 +131,48 @@ Each candidate distribution file is kept only if it passes every active filter:
 
 ## Notes & limitations
 
-- Files come from each package's **latest release** as reported by the PyPI JSON
-  API. The tool does **not** perform version-constrained resolution against the
-  specifiers in `requires_dist` (e.g. `>=3,<5`). If you need an exact, pinned,
-  mutually-consistent set, `pip download` is the right tool.
-- Transitive dependencies contribute their unconditional runtime requirements;
-  extras are only expanded for the root package(s) you ask for directly.
+- You can pin the version of packages you request directly (on the command line
+  or in a requirements file) using pip-style specifiers — an exact `==` pin, or
+  a range like `>=13,<14` (ranges require `packaging` and select the highest
+  matching release).
+- For **transitive** dependencies, an exact `==` pin declared in a parent
+  package's metadata is honoured; any other specifier (`>=`, `~=`, ranges, or no
+  constraint) resolves to the latest release. The tool does **not** perform full
+  version-constrained back-tracking resolution across the whole tree, and when a
+  dependency is required by multiple parents the first specifier encountered (in
+  breadth-first order) wins. If you need an exact, mutually-consistent pinned set
+  across the entire tree, `pip download` is the right tool.
+- Transitive dependencies contribute their unconditional runtime requirements,
+  plus any extras explicitly requested of them by a parent package (e.g. a
+  requirement of `pyjwt[crypto]` expands PyJWT's `crypto` extra and so pulls in
+  `cryptography`). Extras you pass via `--extras` apply to the root package(s).
 - Environment markers are evaluated against the **current** interpreter/OS.
   `--platform` and `--python-version` only affect *which downloaded files* are
   selected, not how markers are evaluated during resolution.
 
 ## Version History
+
+### 1.2.2
+- Fixed a bug where extras requested on transitive dependencies were ignored.
+  A requirement like `pyjwt[crypto]` (as declared by `mcp`) now correctly
+  expands PyJWT's `crypto` extra and pulls in `cryptography` and its
+  dependencies. Extras are now propagated per-package through the graph.
+
+### 1.2.1
+- Added single-letter short aliases for the remaining options: `-e` (`--extras`),
+  `-p` (`--platform`), `-P` (`--python-version`), `-w` (`--wheels-only`),
+  `-n` (`--no-download`), and `-f` (`--free-threaded`).
+
+### 1.2.0
+- Transitive dependencies now honour exact `==` version pins declared in a
+  parent package's metadata (e.g. `pydantic` pinning `pydantic-core==2.27.0`).
+  Non-exact specifiers still resolve to the latest release.
+
+### 1.1.0
+- Added version pinning for root packages via pip-style specifiers
+  (`pkg==1.2.3`, `pkg>=13,<14`), usable on the command line and in requirements
+  files. Exact pins are fetched directly; ranges select the highest matching
+  published release. The resolution summary now shows each package's version.
 
 ### 1.0.0
 - First documented release: added `README.md`, the full `LICENSE` (GNU GPL
